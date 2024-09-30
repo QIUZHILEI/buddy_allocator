@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tom_memory = { path = "../spec/tom_memory", features = ["phy"] }
+tom_memory = { git = "https://github.com/QIUZHILEI/tom_memory.git", features = [
+    "phy",
+] }
