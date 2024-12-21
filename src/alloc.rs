@@ -1,12 +1,12 @@
-use crate::{BitRange, PageQueue};
-use core::{alloc::Layout, cmp};
+use crate::{BitSet, PageQueue};
+use core::{alloc::Layout, cmp, u8};
 use lego_mem::{AllocError, ApFlags, Page, PageAllocator, PageLayout};
 
 pub const MAX_ORDER: usize = 10;
 #[derive(Debug, Default)]
 pub struct BuddyAllocator {
     page_queues: [PageQueue; MAX_ORDER + 1],
-    bit_range: BitRange,
+    bit_set: BitSet,
     mem_start: usize,
     available_start: usize,
     total_size: usize,
@@ -17,7 +17,7 @@ impl BuddyAllocator {
     pub const fn new() -> Self {
         Self {
             page_queues: [PageQueue::new(); MAX_ORDER + 1],
-            bit_range: BitRange::new(),
+            bit_set: BitSet::new(),
             mem_start: 0,
             available_start: 0,
             total_size: 0,
@@ -29,14 +29,28 @@ impl BuddyAllocator {
         assert_eq!(page_start % Self::MIN_PAGE_SIZE, 0);
         self.mem_start = mem_start;
         self.total_size = total_size;
-        let bit_range_len = self.total_size / Self::MIN_PAGE_SIZE;
-        self.bit_range
-            .range(page_start, bit_range_len, Self::MIN_PAGE_SIZE);
-
-        self.available_start = page_start + self.bit_range.size();
+        self.init_bit_set(page_start);
+        self.available_start = page_start + self.bit_set.size();
         self.available_size = self.mem_start + self.total_size - self.available_start;
-
         self.init_queues(self.available_start, mem_start + total_size);
+    }
+
+    fn init_bit_set(&mut self, page_start: usize) {
+        let bit_range_len = self.total_size / Self::MIN_PAGE_SIZE;
+        self.bit_set
+            .init(page_start, bit_range_len, Self::MIN_PAGE_SIZE);
+        let bit_set_size = self.bit_set.size();
+        let in_use = (page_start + bit_set_size - self.mem_start) / Self::MIN_PAGE_SIZE;
+        let bytes = in_use / u8::BITS as usize;
+        if bytes > 0 {
+            unsafe {
+                (page_start as *mut u8).write_bytes(u8::MAX, bytes);
+            }
+        }
+        let mask: u8 = (0b1 << (in_use % u8::BITS as usize)) - 1;
+        unsafe {
+            ((page_start + bytes) as *mut u8).write_bytes(mask, 1);
+        }
     }
 
     fn init_queues(&mut self, start_addr: usize, end_addr: usize) {
@@ -84,9 +98,7 @@ impl BuddyAllocator {
         let mut page_addr = page_addr;
         for order in start_order..self.page_queues.len() {
             let buddy_addr = page_addr ^ self.page_queues[order].page_size();
-            if !self
-                .bit_range
-                .get_bit(self.calculate_page_index(page_addr, Self::MIN_PAGE_SIZE))
+            if !self.bit_set.is_set(self.page_offset(buddy_addr))
                 && self.page_queues[order].in_queue(buddy_addr)
                 && order < MAX_ORDER
             {
@@ -100,8 +112,8 @@ impl BuddyAllocator {
     }
 
     #[inline]
-    fn calculate_page_index(&self, addr: usize, page_size: usize) -> usize {
-        (addr - self.mem_start) / page_size
+    fn page_offset(&self, addr: usize) -> usize {
+        (addr - self.mem_start) / Self::MIN_PAGE_SIZE
     }
 }
 
@@ -126,10 +138,7 @@ impl PageAllocator for BuddyAllocator {
             ));
         }
 
-        self.bit_range.set_bit(
-            self.calculate_page_index(page_addr, Self::MIN_PAGE_SIZE),
-            true,
-        );
+        self.bit_set.set_bit(self.page_offset(page_addr));
         self.available_size -= align as usize;
         Ok(Page {
             layout,
@@ -144,10 +153,7 @@ impl PageAllocator for BuddyAllocator {
         let order =
             (page.layout.align().as_power() - Self::MIN_PAGE_SIZE.trailing_zeros()) as usize;
         self.merge(order, page_addr);
-        self.bit_range.set_bit(
-            self.calculate_page_index(page_addr, Self::MIN_PAGE_SIZE),
-            false,
-        );
+        self.bit_set.clear_bit(self.page_offset(page_addr));
         self.available_size += page.layout.align() as usize;
         Ok(())
     }
