@@ -2,7 +2,6 @@
 pub(crate) struct PageQueue {
     head: usize,
     tail: usize,
-    page_size: usize,
     node_num: usize,
 }
 
@@ -11,26 +10,15 @@ impl PageQueue {
         Self {
             head: 0,
             tail: 0,
-            page_size: 0,
             node_num: 0,
         }
-    }
-
-    #[inline]
-    pub(crate) fn set_page_size(&mut self, page_size: usize) {
-        self.page_size = page_size;
-    }
-
-    #[inline]
-    pub(crate) fn page_size(&self) -> usize {
-        self.page_size
     }
 
     pub(crate) fn enqueue(&mut self, node_addr: usize) {
         assert_ne!(node_addr, 0);
         let new_node = unsafe { PageNode::from_addr(node_addr).as_mut().unwrap() };
         let tail_node = PageNode::from_addr(self.tail);
-        new_node.size = self.page_size;
+        new_node.next = 0;
         new_node.prev = self.tail;
         if self.empty() {
             self.head = node_addr;
@@ -68,36 +56,30 @@ impl PageQueue {
         self.node_num == 0
     }
 
-    #[inline]
-    pub(crate) fn in_queue(&self, node_addr: usize) -> bool {
-        let node = unsafe { PageNode::from_addr(node_addr).as_mut().unwrap() };
-        node.size == self.page_size && !self.empty()
-    }
-
     pub(crate) fn remove(&mut self, node_addr: usize) {
+        assert!(self.node_num > 0);
         let node = unsafe { PageNode::from_addr(node_addr).as_mut().unwrap() };
-        let (prev, prev_node) = (node.prev, PageNode::from_addr(node_addr));
+        let (prev, prev_node) = (node.prev, PageNode::from_addr(node.prev));
         let (next, next_node) = (node.next, PageNode::from_addr(node.next));
         node.next = 0;
         node.prev = 0;
         if !prev_node.is_null() {
             unsafe { (*prev_node).next = next }
+        } else {
+            self.head = next;
         }
         if !next_node.is_null() {
             unsafe { (*next_node).prev = prev }
+        } else {
+            self.tail = prev;
         }
         self.node_num -= 1;
-        if self.empty() {
-            self.head = 0;
-            self.tail = 0;
-        }
     }
 }
 
 struct PageNode {
     prev: usize,
     next: usize,
-    size: usize,
 }
 
 impl PageNode {
