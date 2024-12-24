@@ -1,6 +1,6 @@
 use crate::{map::MemBitMap, queue::PageQueue};
-use core::{alloc::Layout, cmp};
-use lego_mem::{AllocError, ApFlags, Page, PageAllocator, PageLayout};
+use core::cmp;
+use lego_mem::{Align, AllocError, ApFlags, Page, PageAllocator};
 
 pub const MAX_ORDER: usize = 10;
 #[derive(Debug, Default)]
@@ -130,8 +130,7 @@ impl BuddyAllocator {
 impl PageAllocator for BuddyAllocator {
     const MIN_PAGE_SIZE: usize = 4096;
 
-    fn alloc_pages(&mut self, flags: ApFlags, layout: PageLayout) -> Result<Page, AllocError> {
-        let align = layout.align();
+    fn alloc_pages(&mut self, _flags: ApFlags, align: Align) -> Result<Page, AllocError> {
         let order = (align.as_power() - Self::MIN_PAGE_SIZE.trailing_zeros()) as usize;
         if order > MAX_ORDER {
             return Err(AllocError::Misaligned);
@@ -144,26 +143,18 @@ impl PageAllocator for BuddyAllocator {
         }
 
         if page_addr == 0 {
-            return Err(AllocError::OutOfMemory(
-                Layout::array::<u8>(align as usize).unwrap(),
-            ));
+            return Err(AllocError::OutOfMemory);
         }
 
         self.available_size -= align as usize;
-        Ok(Page {
-            layout,
-            flags,
-            addr: page_addr,
-            access: 0,
-        })
+        Ok(Page::new(page_addr, align))
     }
 
     fn free_pages(&mut self, page: Page) -> Result<(), AllocError> {
         let page_addr = page.addr;
-        let order =
-            (page.layout.align().as_power() - Self::MIN_PAGE_SIZE.trailing_zeros()) as usize;
+        let order = (page.align.as_power() - Self::MIN_PAGE_SIZE.trailing_zeros()) as usize;
         self.merge(order, page_addr);
-        self.available_size += page.layout.align() as usize;
+        self.available_size += page.align.as_size();
         Ok(())
     }
 }
